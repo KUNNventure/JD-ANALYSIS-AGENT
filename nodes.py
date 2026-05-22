@@ -1,4 +1,4 @@
-"""Planner 和 Executor 两个核心节点。Day2 骨架阶段逻辑全部写死。"""
+"""Planner 和 Executor 两个核心节点。骨架阶段逻辑全部写死。"""
 
 from tools.mock_tools import mock_t1, mock_t2, mock_t3, mock_t4
 
@@ -22,6 +22,7 @@ def planner(state):
 
 def executor(state):
     """Executor 节点：按 plan 执行当前这一步的工具。
+    (节点函数返回的是dict不是改state,框架自动把他合并进State)
     每次只走一步，结果写回 state，current_step + 1。"""
     step = state["current_step"]
     tool_name = state["plan"][step]      # 取当前该执行的工具名
