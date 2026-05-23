@@ -13,7 +13,6 @@ def mock_t1(state):
         "bonus": ["有开源项目", "熟悉MCP"],
     }
 
-
 def mock_t2(state):
     """T2 简历-JD匹配：JD + 简历 → 三维匹配度 + gap清单"""
     return {
