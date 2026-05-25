@@ -3,6 +3,7 @@
 from dotenv import load_dotenv
 load_dotenv()
 
+from pathlib import Path
 from graph import build_graph
 app = build_graph()
 
@@ -12,7 +13,7 @@ initial_state = {
     "plan": [],
     "current_step": 0,
     "jd_structured": {},
-    "resume": {},
+    "resume": Path("resume.md").read_text(encoding="utf-8"),
     "match_result": {},
     "suggestions": {},
     "interview_pack": {},
