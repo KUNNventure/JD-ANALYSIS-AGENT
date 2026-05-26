@@ -71,3 +71,18 @@ embed 文本范围：job_title + company + tech_stack + responsibilities + bonus
 （实测把"熟练使用 Cursor/Claude Code"列成 high 缺口）。
 对策：prompt 第四步加约束——列 gap 前逐条在简历全文检索是否已具备。
 追问准备：这是一条真实 Bad Case，能讲"prompt 约束如何修复事实性错误"。
+
+## 失败降级策略：关键工具终止 vs 非关键跳过
+
+决策：degrade 节点按依赖关系分两级处理
+- T1/T2（关键）：失败超限 → current_step 跳至末尾 → 流程终止
+- T3/T4（非关键）：失败超限 → 跳过当前步 → 继续后续工具
+原因：T1产出是T2必需输入，T2产出是T3/T4必需输入；关键工具挂了继续跑没有意义且会产生误导性空输出。
+追问准备：为什么T3挂了T4还能跑？→ T4只依赖jd_structured和match_result（T1/T2产出），不依赖suggestions。
+
+## human-in-the-loop 用 interrupt 而非直接过滤
+
+决策：T2低于阈值时暂停图、问用户，而非自动丢弃
+原因：边缘匹配（如55分）可能仍值得投——用户可能愿意补gap；Agent不该替用户悄悄丢掉机会。
+实现：LangGraph interrupt() + MemorySaver checkpointer + Command(resume=answer) 恢复。
+追问准备：为什么不直接过滤？→ 决策权应在用户，Agent提供信息辅助判断而非代替判断。

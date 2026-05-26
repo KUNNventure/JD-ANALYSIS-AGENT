@@ -13,8 +13,8 @@ from dashscope import Generation
 
 # ========== 可调参数（改这里即可，每次改记进 DECISIONS.md）==========
 WEIGHTS = {"personal": 7, "job": 3}   # 个人:岗位 = 5:3，公司维度不计分
-THRESHOLD = 60                         # 加权总分 < 此值 → 触发 human-in-the-loop
-STRONG_MODEL = "qwen-max"                # 强模型；千问max
+THRESHOLD = 60                        # 加权总分 < 此值 → 触发 human-in-the-loop
+STRONG_MODEL = "qwen-max"             # 强模型；千问max
 
 # ========== 给强模型的提示词 ==========
 MATCH_PROMPT = """你是一个资深的技术招聘顾问，正在帮一位求职者评估他与某个岗位的匹配度。
