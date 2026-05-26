@@ -1,15 +1,13 @@
 """Planner 和 Executor 两个核心节点。骨架阶段逻辑全部写死。"""
 
-from tools.mock_tools import mock_t3, mock_t4
-from tools.t1 import t1
-from tools.t2 import t2
+from tools.tool_defs import t1,t2,t3,t4
 
 # 工具名 → 工具函数 的映射，Executor 靠它找到该调哪个工具
 TOOL_MAP = {
     "T1": t1,
     "T2": t2,
-    "T3": mock_t3,
-    "T4": mock_t4,
+    "T3": t3,
+    "T4": t4,
 }
 
 
