@@ -1,6 +1,18 @@
+# 密钥与本地配置
 .env
-data/jd_db/
+.env.*
+
+# 本地数据（Chroma / 简历库 / 向量库）
+data/
+jd_db/
+*.sqlite
+*.sqlite3
+
+# 个人简历（勿提交）
+resume.md
+resume*.md
+
+# Python
 venv/
 __pycache__/
 *.pyc
-resume.md
