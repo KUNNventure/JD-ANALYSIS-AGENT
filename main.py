@@ -5,6 +5,7 @@
   interrupt 触发时会暂停，提示你输入 y/n，然后恢复图继续执行。
 """
 
+import json
 from dotenv import load_dotenv
 load_dotenv()
 
@@ -16,7 +17,7 @@ app = build_graph()
 
 # ========== 初始 state ==========
 initial_state = {
-    "user_request": "帮我分析这份JD和我的简历的匹配度",
+    "user_request": "帮我分析这份JD和我的简历的匹配度，并给出求职准备建议和模拟面试包，不需要面试题",
     "image_paths": ["test_images/jd1.png", "test_images/jd2.png"],
     "plan": [],
     "current_step": 0,
@@ -32,6 +33,41 @@ initial_state = {
 
 # interrupt 必须有 thread_id
 config = {"configurable": {"thread_id": "run-1"}}
+
+# Planner 规划的 T* → state 字段与打印标题（与 nodes.executor 映射一致）
+_OUTPUT_BY_STEP = {
+    "T1": ("结构化 JD (T1)", "jd_structured"),
+    "T2": ("匹配分析 (T2)", "match_result"),
+    "T3": ("求职建议 (T3)", "suggestions"),
+    "T4": ("模拟面试包 (T4)", "interview_pack"),
+}
+
+
+def _print_block(title: str, data, *, skip_if_empty=True):
+    """打印一块 state 产物；空 dict/list 默认跳过（如 plan 未含 T4）。"""
+    if skip_if_empty and not data:
+        return
+    print(f"\n{'=' * 8} {title} {'=' * 8}")
+    # dict/list 格式化为 JSON，中文不转义；其余类型直接 str
+    if isinstance(data, (dict, list)):
+        print(json.dumps(data, ensure_ascii=False, indent=2))
+    else:
+        print(data)
+
+
+def _print_final_results(final: dict):
+    """按本次 plan 里规划的步骤，只打印已有产物的 state 字段。"""
+    plan = final.get("plan") or []
+
+    retry = final.get("retry_count", 0)
+    if retry:
+        print(f"\n重试次数: {retry}")
+
+    for step in plan:
+        if step not in _OUTPUT_BY_STEP:
+            continue
+        title, state_key = _OUTPUT_BY_STEP[step]
+        _print_block(title, final.get(state_key))
 
 
 def run():
@@ -50,6 +86,7 @@ def run():
                 if info.get("top_gaps"):
                     print(f"   主要差距: {', '.join(info['top_gaps'])}")
             else:
+                # 流式阶段只打字段名，完整内容在结束时由 _print_final_results 输出
                 print(f"[{node_name}] 产出字段: {list(node_output.keys())}")
 
     # 检查是否有未处理的 interrupt
@@ -69,15 +106,8 @@ def run():
         snapshot = app.get_state(config)
 
     print("\n=== 执行结束 ===")
-
-    # 打印最终 state 关键字段
-    final = snapshot.values
-    print(f"\n匹配总分: {final.get('match_result', {}).get('weighted_total', 'N/A')}")
-    print(f"重试次数: {final.get('retry_count', 0)}")
-    if final.get("suggestions"):
-        print("✅ 求职建议已生成")
-    if final.get("interview_pack"):
-        print("✅ 模拟面试包已生成")
+    # snapshot.values 即当前 thread 的完整 AgentState
+    _print_final_results(snapshot.values)
 
 
 if __name__ == "__main__":

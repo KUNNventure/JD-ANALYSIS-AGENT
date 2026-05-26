@@ -11,6 +11,6 @@ class AgentState(TypedDict):
     suggestions: dict       # T3 产出：招呼语 + 简历建议 + 交流建议
     interview_pack: dict    # T4 产出：模拟题 + 答案 + 准备建议
     retry_count: int        # 失败重规划计数（成功后归零）
+    replan_count: int       # 重规划次数，防无限循环
     needs_user_input: bool  # human-in-the-loop：用户拒绝后为 True → 路由到 END
-    last_tool_error: str    # 【新增】最近一次工具错误信息，空串=无错误
-    
+    last_tool_error: str    # 最近一次工具错误信息，空串=无错误
