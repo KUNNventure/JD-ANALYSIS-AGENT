@@ -1,14 +1,13 @@
 """Planner / Executor / Degrade / HumanCheck 四个节点。
 
 三条分支：
-  1. 正常推进：executor 成功 → 路由回 executor 或 END
-  2. 失败重规划：executor 异常 → retry_count++ → 路由回 executor 重试；超3次 → degrade 跳过
+  1. 正常推进：executor 成功 → 继续下一步或 END
+  2. 失败处理：同一步失败 → retry_count++ 重试（最多 3 次）→ 仍失败 → degrade → Planner 重出 plan
   3. human-in-the-loop：T2 below_threshold → human_check interrupt → 用户决定继续或放弃
 """
 
 from langgraph.types import interrupt
 from tools.tool_defs import t1, t2, t3, t4
-import state
 import json
 import dashscope
 from dashscope import Generation
@@ -121,7 +120,7 @@ def executor(state):
     tool_name = state["plan"][step]
     tool_func = TOOL_MAP[tool_name]
 
-    # ---- 失败重规划的核心：try/except ----
+    # ---- 失败重试：捕获异常，不推进 current_step ----
     try:
         result = tool_func(state)
     except Exception as e:
@@ -151,24 +150,27 @@ def executor(state):
         result = merged
         print(f"🔀 [T1] 已合并新旧数据")
 
-    return {
-        field_map[tool_name]: result,
+    update = {
         "current_step": step + 1,
-        "last_tool_error": "",   # 清空错误
-        "retry_count": 0,        # 成功后归零
+        "last_tool_error": "",
+        "retry_count": 0,
     }
 
+    # T2 返回 {match_result, similar_jds}，其余工具仍写单一字段
+    if tool_name == "T2" and isinstance(result, dict) and "match_result" in result:
+        update["match_result"] = result["match_result"]
+        update["similar_jds"] = result.get("similar_jds", [])
+    else:
+        update[field_map[tool_name]] = result
 
-# ========== 节点 3：Degrade（重试超限降级）==========
+    return update
 
-# 依赖关系：值里的工具依赖键的产出，键挂了 → 值全跑不了 → 直接终止
-# T1 产出 jd_structured → T2/T3/T4 都要用 → T1 挂 = 全链路死
-# T2 产出 match_result  → T3/T4 要用       → T2 挂 = 后面全死
-# T3 产出 suggestions   → T4 不依赖 T3     → T3 挂 = 跳过，T4 照跑
-# T4 是最后一个                              → T4 挂 = 跳过，结束
+
+# ========== 节点 3：Degrade（重试耗尽 → 交回 Planner）==========
+# 不在此节点跳过 T3/T4；由 Planner 根据 last_tool_error 决定是否改 plan、跳过某步。
 
 def degrade(state):
-    """重试超限：不再自己决定跳过/终止，而是回 Planner 带着错误信息重新规划。"""
+    """同一步重试达上限后，交回 Planner 带错误信息重新出 plan（replan_count 防死循环）。"""
     step = state["current_step"]
     tool_name = state["plan"][step]
     print(f"⚠️ [{tool_name}] 重试 {state['retry_count']} 次仍失败，交回 Planner 重规划")

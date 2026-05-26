@@ -1,7 +1,6 @@
 .env
-jd_db/
+data/jd_db/
 venv/
 __pycache__/
 *.pyc
-tests/
 resume.md

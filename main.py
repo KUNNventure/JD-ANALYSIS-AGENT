@@ -11,9 +11,14 @@ load_dotenv()
 
 from pathlib import Path
 from langgraph.types import Command
-from graph import build_graph
+from agent.graph import build_graph
+from memory.resume_store import load_resume, seed_from_file_if_empty
 
 app = build_graph()
+
+# 简历从 SQLite 读取；库为空时尝试从 resume.md 导入一次
+seed_from_file_if_empty(Path("resume.md"))
+_resume = load_resume()
 
 # ========== 初始 state ==========
 initial_state = {
@@ -22,13 +27,16 @@ initial_state = {
     "plan": [],
     "current_step": 0,
     "jd_structured": {},
-    "resume": Path("resume.md").read_text(encoding="utf-8"),
+    "resume": _resume["content"],
+    "resume_fingerprint": _resume["fingerprint"],
     "match_result": {},
     "suggestions": {},
     "interview_pack": {},
+    "similar_jds": [],
     "retry_count": 0,
+    "replan_count": 0,
     "needs_user_input": False,
-    "last_tool_error": "",      # 新增字段
+    "last_tool_error": "",
 }
 
 # interrupt 必须有 thread_id
