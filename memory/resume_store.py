@@ -1,4 +1,4 @@
-"""简历版本库：SQLite 持久化，按时间链存演进历史。"""
+"""简历库：SQLite 持久化。主流程只读最新版；本地用 resume.md，仓库提供 resume.template.md。"""
 
 import hashlib
 import sqlite3
@@ -92,7 +92,8 @@ def load_resume() -> dict:
     latest = get_latest()
     if not latest:
         raise RuntimeError(
-            "简历库为空。请先入库：python -m memory.resume_store init 你的简历.md"
+            "简历库为空。请复制 resume.template.md 为 resume.md 并填写后重跑，"
+            "或执行：python -m memory.resume_store init resume.md"
         )
     return {
         "content": latest["content"],
@@ -101,15 +102,17 @@ def load_resume() -> dict:
     }
 
 
-def seed_from_file_if_empty(file_path: Path) -> bool:
-    """库为空且文件存在时，导入一次（迁移用）。返回是否导入。"""
+def seed_from_file_if_empty(*paths: Path) -> str | None:
+    """库为空时，按顺序尝试导入。返回实际使用的文件名，未导入则 None。"""
     if get_latest() is not None:
-        return False
-    if not file_path.exists():
-        return False
-    content = file_path.read_text(encoding="utf-8")
-    save_resume(content, note=f"首次导入 {file_path.name}")
-    return True
+        return None
+    for file_path in paths:
+        if not file_path.exists():
+            continue
+        content = file_path.read_text(encoding="utf-8")
+        save_resume(content, note=f"首次导入 {file_path.name}")
+        return file_path.name
+    return None
 
 
 def list_versions() -> list[dict]:

@@ -8,9 +8,8 @@ jd_db/
 *.sqlite
 *.sqlite3
 
-# 个人简历（勿提交）
+# 个人简历（勿提交；模板 resume.template.md 可提交）
 resume.md
-resume*.md
 
 # Python
 venv/

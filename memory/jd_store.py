@@ -67,6 +67,8 @@ def _record_from_meta(meta: dict, jd_id: str, score: float | None = None) -> dic
             "responsibilities": legacy.get("responsibilities", []),
             "match_snapshot": _loads_json(meta.get("match_snapshot", ""), {}),
             "advice_archive": _loads_json(meta.get("advice_archive", ""), {}),
+            "company_info": _loads_json(meta.get("company_info", ""), None),
+            "analyzed_at": meta.get("analyzed_at", ""),
             "similarity_score": score,
         }
     return {
@@ -75,10 +77,12 @@ def _record_from_meta(meta: dict, jd_id: str, score: float | None = None) -> dic
         "company": meta.get("company", ""),
         "salary": meta.get("salary", ""),
         "created_at": meta.get("created_at", ""),
+        "analyzed_at": meta.get("analyzed_at", ""),
         "tech_stack": _loads_json(meta.get("tech_stack", "[]"), []),
         "responsibilities": _loads_json(meta.get("responsibilities", "[]"), []),
         "match_snapshot": _loads_json(meta.get("match_snapshot", ""), {}),
         "advice_archive": _loads_json(meta.get("advice_archive", ""), {}),
+        "company_info": _loads_json(meta.get("company_info", ""), None),
         "similarity_score": score,
     }
 
@@ -115,6 +119,10 @@ def store_jd(jd: JDStructured) -> str:
         "education": jd.education or "",
         "tech_stack": json.dumps(jd.tech_stack, ensure_ascii=False),
         "responsibilities": json.dumps(jd.responsibilities, ensure_ascii=False),
+        "company_info": json.dumps(
+            jd.company_info.model_dump() if jd.company_info else {},
+            ensure_ascii=False,
+        ),
         "analyzed_at": existing.get("analyzed_at", "") if existing else "",
         "match_snapshot": existing.get("match_snapshot", "{}") if existing else "{}",
         "advice_archive": existing.get("advice_archive", "{}") if existing else "{}",
@@ -135,7 +143,6 @@ def build_match_snapshot(match_result: dict, resume_fingerprint: str = "") -> di
     """T2 结束后写入长期记忆的精简快照（jd_decoded 必存）。"""
     gaps = match_result.get("gaps") or []
     reasons = match_result.get("dimension_reasons") or {}
-    profile = match_result.get("company_profile") or {}
     return {
         "weighted_total": match_result["weighted_total"],
         "scores": match_result["scores"],
@@ -145,7 +152,6 @@ def build_match_snapshot(match_result: dict, resume_fingerprint: str = "") -> di
             {"missing": g["missing"], "severity": g["severity"]}
             for g in gaps[:3]
         ],
-        "company_summary": profile.get("summary", ""),
         "resume_fingerprint": resume_fingerprint,
     }
 
@@ -252,7 +258,10 @@ def list_all_records() -> list[dict]:
     """取回全部 record（含分析快照），按 created_at 倒序。"""
     result = _collection.get()
     records = [_record_from_meta(m, i) for i, m in zip(result["ids"], result["metadatas"])]
-    return sorted(records, key=lambda r: r.get("created_at", ""), reverse=True)
+    def _sort_key(r: dict) -> str:
+        return r.get("analyzed_at") or r.get("created_at") or ""
+
+    return sorted(records, key=_sort_key, reverse=True)
 
 
 # ====== 单独测试用 ======

@@ -11,6 +11,7 @@
 """
 import json
 from dashscope import Generation
+from tools.company_context import format_company_block
 
 STRONG_MODEL = "qwen-max"
 
@@ -44,6 +45,12 @@ INTERVIEW_PROMPT = """你是一位资深的 AI 应用开发方向技术面试官
 要求具体可执行，比如"重点准备 XX 的讲法，能讲清楚 A vs B 的 trade-off"，
 不要给"好好准备""保持自信"这种废话。
 
+【公司背景】（面试可能被问到「为什么选这家公司」）
+结合下方工商信息与 JD，在 prep_advice 里至少包含 1 条「如何回答为什么投这家公司」的要点。
+
+【公司/工商信息】
+{company_block}
+
 【输出格式】
 注意：不要重复生成相同的题目，每道题必须不同。生成完 6-8 道后立即停止。
 严格输出 JSON，不要加 ```json 标记，不要加任何解释文字：
@@ -73,9 +80,11 @@ INTERVIEW_PROMPT = """你是一位资深的 AI 应用开发方向技术面试官
 def _build_prompt(jd_structured: dict, match_result: dict) -> str:
     jd_block = json.dumps(jd_structured, ensure_ascii=False, indent=2)
     match_block = json.dumps(match_result, ensure_ascii=False, indent=2)
+    company_block = format_company_block(jd_structured)
     return (INTERVIEW_PROMPT
             .replace("{jd_block}", jd_block)
-            .replace("{match_block}", match_block))
+            .replace("{match_block}", match_block)
+            .replace("{company_block}", company_block))
 
 
 def _call_llm(prompt: str) -> dict:

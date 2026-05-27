@@ -8,7 +8,7 @@ class AgentState(TypedDict):
     jd_structured: dict     # T1 产出：结构化 JD（含 raw_text，仅当次 run）
     resume: str             # 当前简历全文（来源：resume 库最新版）
     resume_fingerprint: str # 简历版本指纹（写入 match_snapshot）
-    match_result: dict      # T2 产出：三维匹配 + gap（含 below_threshold 字段）
+    match_result: dict      # T2 产出：两维匹配 + gap + 公司是否值得投（含 below_threshold）
     suggestions: dict       # T3 产出：招呼语 + 简历建议 + 交流建议
     interview_pack: dict    # T4 产出：模拟题 + 答案 + 准备建议
     retry_count: int        # 当前步骤失败重试次数（成功后归零；达上限走 degrade）

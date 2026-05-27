@@ -1,48 +1,28 @@
 """端到端入口 —— 支持 interrupt（human-in-the-loop）。
 
 用法：
-  python main.py              # 正常跑
-  interrupt 触发时会暂停，提示你输入 y/n，然后恢复图继续执行。
+  python main.py
+  python main.py --images test_images/jd1.png,test_images/jd2.png
+  python main.py --request "只帮我做匹配"
+  python main.py history          # 列表
+  python main.py history 1        # 查看第 1 条详情（不用抄 uuid）
+  python main.py history 1 --raw  # 第 1 条完整 JSON
 """
 
+import argparse
 import json
+import uuid
+from pathlib import Path
+
 from dotenv import load_dotenv
+
 load_dotenv()
 
-from pathlib import Path
 from langgraph.types import Command
-from agent.graph import build_graph
-from memory.resume_store import load_resume, seed_from_file_if_empty
 
-app = build_graph()
+DEFAULT_IMAGES = ["test_images/jd1.png", "test_images/jd2.png"]
+DEFAULT_REQUEST = "帮我分析这份JD和简历的匹配度，给出求职准备建议和模拟面试包"
 
-# 简历从 SQLite 读取；库为空时尝试从 resume.md 导入一次
-seed_from_file_if_empty(Path("resume.md"))
-_resume = load_resume()
-
-# ========== 初始 state ==========
-initial_state = {
-    "user_request": "帮我分析这份JD和我的简历的匹配度，并给出求职准备建议和模拟面试包，不需要面试题",
-    "image_paths": ["test_images/jd1.png", "test_images/jd2.png"],
-    "plan": [],
-    "current_step": 0,
-    "jd_structured": {},
-    "resume": _resume["content"],
-    "resume_fingerprint": _resume["fingerprint"],
-    "match_result": {},
-    "suggestions": {},
-    "interview_pack": {},
-    "similar_jds": [],
-    "retry_count": 0,
-    "replan_count": 0,
-    "needs_user_input": False,
-    "last_tool_error": "",
-}
-
-# interrupt 必须有 thread_id
-config = {"configurable": {"thread_id": "run-1"}}
-
-# Planner 规划的 T* → state 字段与打印标题（与 nodes.executor 映射一致）
 _OUTPUT_BY_STEP = {
     "T1": ("结构化 JD (T1)", "jd_structured"),
     "T2": ("匹配分析 (T2)", "match_result"),
@@ -52,11 +32,9 @@ _OUTPUT_BY_STEP = {
 
 
 def _print_block(title: str, data, *, skip_if_empty=True):
-    """打印一块 state 产物；空 dict/list 默认跳过（如 plan 未含 T4）。"""
     if skip_if_empty and not data:
         return
     print(f"\n{'=' * 8} {title} {'=' * 8}")
-    # dict/list 格式化为 JSON，中文不转义；其余类型直接 str
     if isinstance(data, (dict, list)):
         print(json.dumps(data, ensure_ascii=False, indent=2))
     else:
@@ -64,13 +42,10 @@ def _print_block(title: str, data, *, skip_if_empty=True):
 
 
 def _print_final_results(final: dict):
-    """按本次 plan 里规划的步骤，只打印已有产物的 state 字段。"""
     plan = final.get("plan") or []
-
     retry = final.get("retry_count", 0)
     if retry:
         print(f"\n重试次数: {retry}")
-
     for step in plan:
         if step not in _OUTPUT_BY_STEP:
             continue
@@ -78,45 +53,225 @@ def _print_final_results(final: dict):
         _print_block(title, final.get(state_key))
 
 
-def run():
-    print("=== 开始执行 ===\n")
+def _print_paths(label: str, paths: list):
+    print(f"   {label}:")
+    if not paths:
+        print("     （无）")
+        return
+    for p in paths:
+        exists = Path(p).exists()
+        mark = "" if exists else " [文件不存在]"
+        print(f"     · {p}{mark}")
 
-    # 第一轮：正常跑，遇到 interrupt 会自动停下来
-    for event in app.stream(initial_state, config):
+
+def _log_node_event(node_name: str, node_output) -> None:
+    """打印节点产出字段；executor/checker 已在节点内打日志，且 checker 空返回时 output 可能为 None。"""
+    if node_output is None:
+        return
+    if node_name in ("executor", "checker"):
+        return
+    if isinstance(node_output, dict):
+        print(f"[{node_name}] 产出字段: {list(node_output.keys())}")
+
+
+def _print_interrupt(info: dict):
+    """按 interrupt 类型展示提示（含 T1 缺失字段清单）。"""
+    print(f"\n🔔 {info.get('message', '')}")
+    itype = info.get("type", "low_score")
+
+    if itype == "t1_missing_fields":
+        labels = info.get("missing_labels") or info.get("missing_fields") or []
+        if labels:
+            print("   未能从截图提取到：")
+            for label in labels:
+                print(f"     · {label}")
+        _print_paths("当前使用的截图", info.get("image_paths") or [])
+        return
+
+    if itype == "low_score":
+        if "personal_score" in info:
+            print(f"   个人维度: {info['personal_score']}")
+            print(f"   岗位维度: {info['job_score']}")
+            print(f"   加权总分: {info['weighted_total']}")
+        if info.get("top_gaps"):
+            print(f"   主要差距: {', '.join(info['top_gaps'])}")
+
+
+def _resolve_image_paths(raw: str) -> list[str] | None:
+    paths = [p.strip() for p in raw.split(",") if p.strip()]
+    if not paths:
+        return None
+    missing = [p for p in paths if not Path(p).exists()]
+    if missing:
+        print(f"⚠️ 以下路径不存在: {', '.join(missing)}")
+        return None
+    return paths
+
+
+def _prompt_resume_command(info: dict) -> Command:
+    itype = info.get("type", "low_score")
+
+    if itype == "t1_missing_fields":
+        _print_paths("当前截图", info.get("image_paths") or [])
+        print(
+            "\n请输入补充后的 JD 截图路径（多张用英文逗号分隔）。\n"
+            "直接回车 = 用当前路径再试一次；输入 n = 结束分析。"
+        )
+        raw = input("路径: ").strip()
+        if raw.lower() in ("n", "no", "否", "不", "终止"):
+            return Command(resume="n")
+        if not raw:
+            return Command(
+                resume="y",
+                update={"last_tool_error": "", "jd_structured": {}},
+            )
+        paths = _resolve_image_paths(raw)
+        while paths is None:
+            raw = input("请重新输入路径（或 n 结束）: ").strip()
+            if raw.lower() in ("n", "no", "否", "不", "终止"):
+                return Command(resume="n")
+            if not raw:
+                return Command(
+                    resume="y",
+                    update={"last_tool_error": "", "jd_structured": {}},
+                )
+            paths = _resolve_image_paths(raw)
+        return Command(
+            resume="y",
+            update={
+                "image_paths": paths,
+                "jd_structured": {},
+                "last_tool_error": "",
+            },
+        )
+
+    answer = input("\n请输入 y(继续) 或 n(放弃): ").strip()
+    return Command(resume=answer)
+
+
+def _parse_images_arg(raw: str | None) -> list[str]:
+    if not raw:
+        return list(DEFAULT_IMAGES)
+    paths = [p.strip() for p in raw.split(",") if p.strip()]
+    missing = [p for p in paths if not Path(p).exists()]
+    if missing:
+        raise SystemExit(f"截图不存在: {', '.join(missing)}")
+    return paths
+
+
+def _build_initial_state(*, images: list[str], user_request: str) -> dict:
+    from memory.resume_store import load_resume, seed_from_file_if_empty
+
+    seeded_from = seed_from_file_if_empty(Path("resume.md"), Path("resume.template.md"))
+    if seeded_from == "resume.template.md":
+        print(
+            "⚠️ 已从 resume.template.md 导入占位简历，请复制为 resume.md 并填写真实内容后再正式投递分析。\n"
+        )
+    resume = load_resume()
+    return {
+        "user_request": user_request,
+        "image_paths": images,
+        "plan": [],
+        "current_step": 0,
+        "jd_structured": {},
+        "resume": resume["content"],
+        "resume_fingerprint": resume["fingerprint"],
+        "match_result": {},
+        "suggestions": {},
+        "interview_pack": {},
+        "similar_jds": [],
+        "retry_count": 0,
+        "replan_count": 0,
+        "needs_user_input": False,
+        "last_tool_error": "",
+    }
+
+
+def run(*, images: list[str], user_request: str):
+    from agent.graph import build_graph
+
+    app = build_graph()
+    thread_id = f"run-{uuid.uuid4().hex[:8]}"
+    config = {"configurable": {"thread_id": thread_id}}
+    state = _build_initial_state(images=images, user_request=user_request)
+
+    print("=== 开始执行 ===")
+    print(f"thread_id: {thread_id}")
+    _print_paths("JD 截图", images)
+    print()
+
+    last_interrupt: dict = {}
+
+    for event in app.stream(state, config):
         for node_name, node_output in event.items():
             if node_name == "__interrupt__":
-                # interrupt 触发了，打印提示信息
-                info = node_output[0].value   # interrupt() 传出的那个 dict
-                print(f"\n🔔 {info['message']}")
-                print(f"   个人维度: {info['personal_score']}")
-                print(f"   岗位维度: {info['job_score']}")
-                print(f"   加权总分: {info['weighted_total']}")
-                if info.get("top_gaps"):
-                    print(f"   主要差距: {', '.join(info['top_gaps'])}")
+                last_interrupt = node_output[0].value
+                _print_interrupt(last_interrupt)
             else:
-                # 流式阶段只打字段名，完整内容在结束时由 _print_final_results 输出
-                print(f"[{node_name}] 产出字段: {list(node_output.keys())}")
+                _log_node_event(node_name, node_output)
 
-    # 检查是否有未处理的 interrupt
     snapshot = app.get_state(config)
-    while snapshot.next:  # next 非空说明图还没结束（被 interrupt 暂停了）
-        answer = input("\n请输入 y(继续) 或 n(放弃): ").strip()
+    while snapshot.next:
+        cmd = _prompt_resume_command(last_interrupt or {"type": "low_score"})
 
-        # 用 Command(resume=answer) 恢复图
-        for event in app.stream(Command(resume=answer), config):
+        for event in app.stream(cmd, config):
             for node_name, node_output in event.items():
                 if node_name == "__interrupt__":
-                    info = node_output[0].value
-                    print(f"\n🔔 {info['message']}")
+                    last_interrupt = node_output[0].value
+                    _print_interrupt(last_interrupt)
                 else:
-                    print(f"[{node_name}] 产出字段: {list(node_output.keys())}")
+                    _log_node_event(node_name, node_output)
 
         snapshot = app.get_state(config)
 
     print("\n=== 执行结束 ===")
-    # snapshot.values 即当前 thread 的完整 AgentState
     _print_final_results(snapshot.values)
 
 
+def _cmd_history(args):
+    from memory.history import print_history
+
+    print_history(
+        limit=args.limit,
+        detail_jd_id=args.id,
+        index=args.index,
+        raw=args.raw,
+    )
+
+
+def main():
+    parser = argparse.ArgumentParser(description="JD 分析 Agent")
+    parser.add_argument(
+        "--images",
+        default=None,
+        help="JD 截图路径，多张用英文逗号分隔（默认 test_images/jd1.png,jd2.png）",
+    )
+    parser.add_argument(
+        "--request",
+        default=DEFAULT_REQUEST,
+        help="用户请求（传给 Planner）",
+    )
+    sub = parser.add_subparsers(dest="command")
+    sub.add_parser("run", help="分析 JD（默认命令，可省略）")
+    h = sub.add_parser("history", help="查看历史 JD 分析")
+    h.add_argument(
+        "index",
+        nargs="?",
+        type=int,
+        help="列表序号（与 history 列表左侧数字一致，1=最近一条）",
+    )
+    h.add_argument("--id", default=None, help="按 jd_id 或前缀查详情（可选，一般用序号即可）")
+    h.add_argument("--limit", type=int, default=20, help="列表条数")
+    h.add_argument("--raw", action="store_true", help="详情输出完整 JSON")
+
+    args = parser.parse_args()
+    if args.command == "history":
+        _cmd_history(args)
+        return
+
+    images = _parse_images_arg(args.images)
+    run(images=images, user_request=args.request)
+
+
 if __name__ == "__main__":
-    run()
+    main()
