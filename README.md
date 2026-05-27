@@ -1,10 +1,14 @@
 # JD Analysis Agent
 
-面向求职场景的 **JD 截图分析 Agent**：上传招聘平台 JD 截图 + 本地简历，自动完成结构化解析、简历匹配打分、求职准备建议与模拟面试包生成。
-
-基于 **LangGraph Plan-Execute** 编排，支持 LLM 动态规划、工具失败重试/重规划、Checker 产出校验，以及低分岗位的 **human-in-the-loop** 确认。
+输入招聘平台 **JD 截图 + 个人简历**，自动完成 **岗位匹配评分、求职建议生成与模拟面试准备**。基于 **LangGraph Agent** 架构，支持 LLM 动态规划、工具失败重试/重规划，以及低分岗位的确认式继续（human-in-the-loop）。
 
 > 示例 JD 截图见 `test_images/`（脱敏/样例用途）。个人真实简历请使用本地 `resume.md`，**勿提交到仓库**。
+
+### 运行效果
+
+![终端运行效果](docs/images/demo-terminal.png)
+
+*上图：`python main.py history 1` 的可读摘要（匹配分、gap、建议与面试题预览）。完整 JSON 见下方「输出示例」。*
 
 ---
 
@@ -16,6 +20,13 @@
 | **T2** | 简历匹配 | 个人/岗位二维打分（7:3 加权）+ gap 分析；检索历史相似 JD 辅助校准 |
 | **T3** | 求职建议 | 招呼语、简历修改建议、沟通要点 |
 | **T4** | 模拟面试包 | 模拟题 + 答案要点 + 准备建议 |
+| **—** | **Checker** | T1/T2 产出字段校验：缺关键字段则自动重试；T1 仍缺则 interrupt 让用户补截图 |
+
+**Checker 校验什么？** 在每次 `executor` 成功之后、进入下一步之前，按代码里定义的必填字段检查（非 LLM 主观打分）：
+
+- **T1**：`job_title`、`tech_stack`、`requirements`、`responsibilities` 缺一不可；首次缺失自动重跑 T1 一次，仍缺则暂停并提示补截图  
+- **T2**：`scores`、`gaps`、`weighted_total` 必须存在；缺失则回退重跑同一步（计入重试次数）  
+- **T3/T4**：末端生成类输出，不做强校验  
 
 **Planner** 根据自然语言请求动态选择工具链，例如：
 
@@ -178,7 +189,8 @@ jd-analysis-agent/
 │   └── jd.py            # JDStructured 数据模型
 ├── test_images/         # 示例 JD 截图
 ├── docs/
-│   ├── DECISIONS.md     # 设计决策（面试深挖材料）
+│   ├── DECISIONS.md     # 核心设计决策
+│   └── images/          # README 演示截图（demo-terminal.png）
 │   └── DEV_LOG.md       # 开发日志
 ├── resume.template.md   # 简历模板（可提交）
 └── resume.md            # 本地真实简历（勿提交）
@@ -188,7 +200,7 @@ jd-analysis-agent/
 
 ---
 
-## 设计亮点（面试可展开）
+## 核心设计决策
 
 完整论证见 [`docs/DECISIONS.md`](docs/DECISIONS.md)，此处摘录核心取舍：
 
@@ -207,25 +219,41 @@ jd-analysis-agent/
 
 ## 输出示例
 
-运行结束后终端按步骤打印 JSON，例如：
+全流程跑完后，终端按 T1–T4 打印 JSON；日常查看推荐可读摘要：
 
-- **T1**：`job_title`、`tech_stack`、`responsibilities`、`raw_text` 等  
-- **T2**：`personal_score` / `job_score`、`weighted_total`、`gaps`、`below_threshold`  
-- **T3**：`greeting`、`resume_advice`、`communication_advice`  
-- **T4**：`questions`、`prep_tips` 等  
+```bash
+python main.py history      # 列表
+python main.py history 1    # 最近一条：匹配分、gap、招呼语、面试题预览
+```
 
-可在 `python main.py history` 中回看历次分析的摘要与详情。
+摘要示例（字段节选）：
 
-> **Demo 占位**：建议在仓库 `docs/` 或 README 顶部补充一张终端跑通截图 / 短视频 GIF，便于招聘方 30 秒内建立印象。
+```text
+========== 匹配 (T2) ==========
+加权总分: 80.5
+  个人 85 / 岗位 70
+  gap [high]: 后端开发经验
+
+========== 求职建议 (T3) ==========
+招呼语: 您好！我对贵公司发布的 AI 应用开发实习生岗位非常感兴趣…
+
+========== 面试包 (T4) ==========
+共 6 道题
+  1. [technical] 请解释一下 Golang 中的 goroutine…
+```
+
+完整 JSON：`python main.py history 1 --raw`
 
 ---
 
-## 已知限制
+## 当前版本边界与迭代方向
 
-- 当前为 **CLI**，无 Web UI  
-- 匹配阈值 `60`、权重 `7:3` 为 MVP 初值，待 Bad Case 回归校准  
-- 公司维度不打分（缺用户偏好数据），公司画像在 T3 侧呈现  
-- `MemorySaver` 仅用于当次会话的 interrupt 断点，跨会话历史靠 Chroma / SQLite  
+| 边界 | 说明 | 后续方向 |
+|------|------|----------|
+| **交互形态** | CLI，无 Web UI | 可选 Streamlit / 简单前端 |
+| **匹配模型** | 个人:岗位 = 7:3；阈值 60 为 MVP 初值 | 通过 **Bad Case 回归集** 校准权重与阈值 |
+| **公司评估** | T2 仅做人岗匹配；公司维度因缺用户偏好数据，**MVP 下沉至 T3 定性呈现**（`company_profile` / `company_viability`） | 接入用户偏好后可恢复公司维打分 |
+| **会话断点** | `MemorySaver` 仅服务当次 interrupt | 跨会话历史已用 Chroma + SQLite 持久化 |
 
 ---
 
